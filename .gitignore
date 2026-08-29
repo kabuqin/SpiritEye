@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 安全审计报告生成产物
+# 保留模板与样例数据，忽略具体审计报告（可能含敏感信息）
+SpiritEye/reports/*.docx
+!SpiritEye/reports/report_template.docx
+SpiritEye/reports/*.html
+SpiritEye/reports/*_report.json
+!SpiritEye/reports/pikachu_report.json
+
+# OSS 凭证（如改用本地配置文件方式，禁止入库）
+oss_credentials.json
+.env

