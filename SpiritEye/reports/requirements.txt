@@ -1,0 +1,5 @@
+# 灵眸·天鉴（SpiritEye）报告生成器依赖
+# 安装：python -m pip install -r requirements.txt
+
+python-docx>=1.1.0   # 生成 Word（.docx）报告，必装
+oss2>=2.18.0        # 上传报告至阿里云 OSS，仅使用 --upload 时需安装

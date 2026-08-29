@@ -9,7 +9,7 @@ AI 驱动的静态应用安全测试（SAST）工具，用于代码漏洞分析�
 
 ## 功能特性
 
-- 覆盖 **34 类漏洞**知识库（SQL 注入、XSS、SSRF、RCE、越权、反序列化、XXE 等）
+- 覆盖 **35 类漏洞**知识库（SQL 注入、XSS、SSRF、RCE、越权、反序列化、XXE、供应链攻击等）
 - **Source→Sink 污点追踪**：定位攻击者可控输入到危险函数的完整数据流
 - **Judge 复核机制**：只报告 CONFIRMED/LIKELY 级别发现，显著降低误报
 - 输出 **Word + HTML 双格式**安全自查报告，支持一键上传 OSS
@@ -21,7 +21,7 @@ AI 驱动的静态应用安全测试（SAST）工具，用于代码漏洞分析�
 SpiritEye/                    ← 灵眸·天鉴（SpiritEye）工具
 ├── README.md
 ├── SKILL.md                  # 技能主文件：7 步审计流程 + Judge 验证
-├── references/               # 34 个漏洞知识库
+├── references/               # 35 个漏洞知识库
 ├── reports/                  # 报告生成器与审计结果数据
 │   ├── generate_report.py    # 报告生成 + OSS 上传
 │   └── pikachu_report.json   # 审计结果样例（Pikachu 靶场，45 项发现）
@@ -41,6 +41,9 @@ SpiritEye/                    ← 灵眸·天鉴（SpiritEye）工具
 ## 报告生成
 
 ```bash
+# 首次使用：安装报告生成器依赖（python-docx、oss2）
+python -m pip install -r SpiritEye/reports/requirements.txt
+
 # 生成 docx + html 报告
 python reports/generate_report.py reports/<项目>_report.json
 

@@ -5,11 +5,11 @@ description: >
   SpiritEye is a general-purpose Static Application Security Testing (SAST) skill for code vulnerability analysis.
   触发场景：用户要求"分析代码漏洞"、"审查代码安全"、"查找安全缺陷"、"执行 SAST 扫描"、
   "检查代码中的[某类漏洞]"、"审计源代码"，或对任意语言/框架请求安全代码审查。
-  覆盖 Web、API、认证授权、移动端、业务逻辑等 34 类漏洞。
+  覆盖 Web、API、认证授权、移动端、业务逻辑等 35 类漏洞。
 metadata:
-  version: "1.3.2"
+  version: "0.1.0"
   domain: application-security
-  references: 34 vulnerability knowledge bases
+  references: 35 vulnerability knowledge bases
 ---
 
 # SAST 漏洞分析（灵眸·天鉴 SpiritEye）
@@ -17,6 +17,13 @@ metadata:
 ## 目标
 
 使用结构化的 Source→Sink 污点追踪、模式匹配与漏洞类专属检测规则，系统性地分析源代码中的安全漏洞。输出可落地的发现结果，包含严重性评级、受影响代码位置（文件+行号）与修复建议。
+
+## 授权与合规边界
+
+- **仅审计授权目标**：默认只审计用户明确有权测试 / 审查的源代码。对外部组织或个人代码的审计，需具备书面授权（渗透测试授权书、安全评估委托等）
+- **只读分析**：本技能进行静态分析，不执行破坏性操作；渗透测试 payload 验证仅限已授权的靶场 / 测试环境（如 pikachu-master）
+- **数据合规**：审计结果可能含敏感信息，报告须妥善保管；OSS 上传仅在用户配置凭证并明确要求时进行，凭证一律走环境变量
+- **禁止滥用**：不得将本技能用于未授权入侵、规避安全防护或其他不当用途
 
 ## 覆盖范围
 
@@ -26,15 +33,15 @@ metadata:
 
 | 支持语言 | 审计方式 |
 |---|---|
-| **Java** | 通用 34 类漏洞 + Spring/Struts 等框架特定 Source/Sink 模式（反序列化链、JNDI、SpEL 等） |
-| **Python** | 通用 34 类漏洞 + Django/Flask/FastAPI 等框架特定模式（pickle/yaml.load、模板注入等） |
-| **JavaScript / TypeScript** | 通用 34 类漏洞 + Node.js/浏览器端特定模式（原型污染、NoSQL 注入等） |
-| **PHP** | 通用 34 类漏洞 + `php_security.md` 平台特有知识库（eval/assert、allow_url_include 等） |
-| **.NET** | 通用 34 类漏洞 + ASP.NET 框架特定模式（反序列化、视图注入等） |
+| **Java** | 通用 35 类漏洞 + Spring/Struts 等框架特定 Source/Sink 模式（反序列化链、JNDI、SpEL 等） |
+| **Python** | 通用 35 类漏洞 + Django/Flask/FastAPI 等框架特定模式（pickle/yaml.load、模板注入等） |
+| **JavaScript / TypeScript** | 通用 35 类漏洞 + Node.js/浏览器端特定模式（原型污染、NoSQL 注入等） |
+| **PHP** | 通用 35 类漏洞 + `php_security.md` 平台特有知识库（eval/assert、allow_url_include 等） |
+| **.NET** | 通用 35 类漏洞 + ASP.NET 框架特定模式（反序列化、视图注入等） |
 
 ### 漏洞覆盖
 
-本技能覆盖以下 34 类漏洞。每一类都有独立的参考文档，按需加载：
+本技能覆盖以下 35 类漏洞。每一类都有独立的参考文档，按需加载：
 
 | 类别 | 漏洞 |
 |----------|----------------|
@@ -42,10 +49,10 @@ metadata:
 | **访问控制与认证（Access Control & Auth）** | IDOR、越权、认证/JWT、默认凭据、暴力破解、业务逻辑、HTTP 方法篡改、验证码滥用、会话固定 |
 | **数据暴露与加密（Data Exposure & Crypto）** | 弱加密/弱哈希、信息泄露、不安全的 Cookie 属性、信任边界 |
 | **服务端（Server-Side）** | SSRF、路径穿越/LFI/RFI、不安全反序列化、任意文件上传、JNDI 注入、竞态条件 |
-| **协议与基础设施（Protocol & Infrastructure）** | CSRF、开放重定向、HTTP 请求走私/失步、拒绝服务、CVE 模式 |
+| **协议与基础设施（Protocol & Infrastructure）** | CSRF、开放重定向、HTTP 请求走私/失步、拒绝服务、CVE 模式、供应链攻击（supply_chain） |
 | **语言/平台（Language/Platform）** | PHP 安全、移动端安全（Android/iOS） |
 
-> **说明**："语言/平台"类别仅收录**平台特有漏洞知识库**（PHP 安全、移动端安全）。Java、Python、JavaScript/TypeScript、.NET 的漏洞检测由上方 32 类通用漏洞知识库 + 各语言适配规则完成，并非仅能审计 PHP 与移动端。
+> **说明**："语言/平台"类别仅收录**平台特有漏洞知识库**（PHP 安全、移动端安全）。Java、Python、JavaScript/TypeScript、.NET 的漏洞检测由上方 33 类通用漏洞知识库 + 各语言适配规则完成，并非仅能审计 PHP 与移动端。
 
 ---
 
@@ -91,6 +98,7 @@ references/business_logic.md             — 业务逻辑缺陷
 references/http_method_tamper.md         — HTTP 方法篡改
 references/smuggling_desync.md           — HTTP 请求走私 / 失步
 references/cve_patterns.md               — 已知 CVE 模式
+references/supply_chain.md               — 供应链攻击（依赖投毒 / CI-CD 可变标签 / SBOM）
 references/expression_language_injection.md — 表达式语言注入（SpEL / OGNL）
 references/jndi_injection.md             — JNDI 注入（Log4Shell 类）
 references/denial_of_service.md          — 拒绝服务 / 资源耗尽
@@ -101,7 +109,7 @@ references/session_fixation.md           — 会话固定
 
 **加载策略：**
 - 定向审查（如"检查 SQL 注入"）：只加载相关参考文档
-- 完整审计：加载全部 34 份参考文档，系统化扫描
+- 完整审计：加载全部 35 份参考文档，系统化扫描
 - 即使未被明确要求，也应加载 OWASP Top 风险对应的参考文档
 
 ---
@@ -298,12 +306,17 @@ Blocked by: <需要什么附加上下文>
 
 #### 报告结构
 
-生成完整报告时，写入 `sast_report.md`（或用户指定路径）：
+报告输出采用**双轨制**，避免中间产物不一致：
+
+- **对话内摘要**：在回复中直接给出 markdown 摘要（下方结构），供用户即时阅读；不落盘、不生成 `sast_report.md`
+- **结构化落盘**：正式数据一律按第 7 步的 `<project>_report.json` schema 落盘，由报告生成器产出 docx/html——`sast_report.md` 不再作为中间产物
+
+对话内摘要格式：
 
 ```markdown
 # SAST 安全报告 — <目标>
 Date: <日期>
-Analyzer: 灵眸·天鉴（SpiritEye）v1.3.2
+Analyzer: 灵眸·天鉴（SpiritEye）v0.1.0
 
 ## 摘要
 <2-3 句：按严重性统计发现总数、最严重问题>
@@ -326,14 +339,19 @@ Analyzer: 灵眸·天鉴（SpiritEye）v1.3.2
 每次审计都必须产出标准化报告并上传至 OSS。使用 `reports/` 中的报告生成器：
 
 1. **整理结构化数据** — 将审计结果按 `reports/pikachu_report.json` 的 schema 组织为 `<project>_report.json`（报告元信息、目标、方法、含严重性统计/P0/P1 的摘要、章节、含描述/证据/利用/修复的发现列表、整改跟踪表）
-2. **生成并上传** — 运行：
+2. **环境准备（首次使用）** — 安装报告生成器依赖：
+   ```
+   python -m pip install -r reports/requirements.txt
+   ```
+   依赖：`python-docx`（Word 报告，必装）、`oss2`（OSS 上传，仅 `--upload` 时需要）
+3. **生成并上传** — 运行：
    ```
    python reports/generate_report.py reports/<project>_report.json --upload
    ```
    该命令在 JSON 所在目录生成 `<date>_<project>_安全自查报告.docx` 与 `.html`，并将两者上传至 OSS（目标地址由环境变量 `OSS_BUCKET` / `OSS_ENDPOINT` 指定，不在代码或文档中写死）。
    - OSS 凭证从环境变量 `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` 读取（切勿硬编码）
    - 跳过上传：去掉 `--upload`；重新生成 Word 占位符模板：加 `--make-template`
-3. **回报结果** — 向用户提供本地文件路径与 OSS 公网 URL
+4. **回报结果** — 向用户提供本地文件路径与 OSS 公网 URL
 
 ---
 
